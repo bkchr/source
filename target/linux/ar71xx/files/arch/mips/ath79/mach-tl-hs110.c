@@ -10,6 +10,7 @@
 
 #include <linux/gpio.h>
 #include <linux/printk.h>
+#include <linux/delay.h>
 
 #include <asm/mach-ath79/ath79.h>
 #include <asm/mach-ath79/ar71xx_regs.h>
@@ -112,6 +113,398 @@ static void __init hornet_ub_gpio_setup(void)
 
 }
 
+#define CONFIG_SH_TRICOLOR_LED
+#define CONFIG_SH_TRICOLOR_RED_LED_GPIO 15
+#define CONFIG_SH_TRICOLOR_GREEN_LED_GPIO 14
+#define CONFIG_SH_SWITCH_LED_GPIO 16
+#define CONFIG_SH_SWITCH_CTRL_OUT_GPIO 28
+#define CONFIG_SH_SWITCH_CTRL_IN_GPIO 17
+// I don't have any idea where that is defined in the original kernel
+#define CONFIG_SH_SWITCH_CTRL_IN_ON 0
+
+static struct proc_dir_entry *smart_home_entry = NULL;
+
+static struct proc_dir_entry *sh_led_off_entry = NULL;
+static atomic_t led_off = ATOMIC_INIT(0);
+static int gpio_sh_led_off_read (char *page, char **start, off_t off,
+               int count, int *eof, void *data)
+{
+	return sprintf (page, "%d\n", atomic_read(&led_off));
+}
+
+static int gpio_sh_led_off_write (struct file *file, const char *buf,
+                                        unsigned long count, void *data)
+{
+	 u_int32_t val;
+
+    if (sscanf(buf, "%d", &val) != 1)
+        return -EINVAL;
+
+	if (val == 0){
+		atomic_set(&led_off, 0);
+	}
+	else{
+		atomic_set(&led_off, 1);
+	}
+
+	return count;
+}
+
+
+#ifdef CONFIG_RESET_GPIO
+static struct proc_dir_entry *sh_reset_entry = NULL;
+static int rst_btn_down = 0;
+
+static int gpio_sh_reset_read (char *page, char **start, off_t off,
+               int count, int *eof, void *data)
+{
+	int tmp = rst_btn_down;
+	return sprintf (page, "%d\n", tmp);
+}
+
+static int gpio_sh_reset_write (struct file *file, const char *buf,
+                                        unsigned long count, void *data)
+{
+	return count;
+}
+
+irqreturn_t reset_irq(int cpl, void *dev_id, struct pt_regs *regs)
+{
+	if (rst_btn_down)
+	{
+		ar7240_gpio_config_int (CONFIG_RESET_GPIO, INT_TYPE_LEVEL, CONFIG_RESET_GPIO_EFFECT ? INT_POL_ACTIVE_HIGH : INT_POL_ACTIVE_LOW);
+		rst_btn_down = 0;
+	}
+	else
+	{
+		ar7240_gpio_config_int (CONFIG_RESET_GPIO, INT_TYPE_LEVEL, CONFIG_RESET_GPIO_EFFECT ? INT_POL_ACTIVE_LOW : INT_POL_ACTIVE_HIGH);
+		rst_btn_down = 1;
+	}
+	return IRQ_HANDLED;
+}
+#endif
+
+#ifdef CONFIG_SH_TRICOLOR_LED
+static struct proc_dir_entry *sh_tricolor_red_led_entry = NULL;
+static struct proc_dir_entry *sh_tricolor_green_led_entry = NULL;
+
+static int gpio_sh_tricolor_red_led_read (char *page, char **start, off_t off,
+               int count, int *eof, void *data)
+{
+    return count;
+}
+
+static int gpio_sh_tricolor_red_led_write (struct file *file, const char *buf,
+                                        unsigned long count, void *data)
+{
+  u_int32_t val;
+
+    if (sscanf(buf, "%d", &val) != 1)
+        return -EINVAL;
+
+	if (val == 0)
+		ar7240_gpio_out_val (CONFIG_SH_TRICOLOR_RED_LED_GPIO, !CONFIG_SH_TRICOLOR_LED_ON);
+	else
+		ar7240_gpio_out_val (CONFIG_SH_TRICOLOR_RED_LED_GPIO, CONFIG_SH_TRICOLOR_LED_ON);
+
+	return count;
+}
+
+static int gpio_sh_tricolor_green_led_read (char *page, char **start, off_t off,
+               int count, int *eof, void *data)
+{
+    return count;
+}
+
+static int gpio_sh_tricolor_green_led_write (struct file *file, const char *buf,
+                                        unsigned long count, void *data)
+{
+	 u_int32_t val;
+
+    if (sscanf(buf, "%d", &val) != 1)
+        return -EINVAL;
+
+	if (val == 0)
+		ar7240_gpio_out_val (CONFIG_SH_TRICOLOR_GREEN_LED_GPIO, !CONFIG_SH_TRICOLOR_LED_ON);
+	else
+		ar7240_gpio_out_val (CONFIG_SH_TRICOLOR_GREEN_LED_GPIO, CONFIG_SH_TRICOLOR_LED_ON);
+
+	return count;
+}
+
+#endif
+
+#ifdef CONFIG_SH_SWITCH_LED_GPIO
+static struct proc_dir_entry *sh_switch_led_entry = NULL;
+
+static int gpio_sh_switch_led_read (char *page, char **start, off_t off,
+               int count, int *eof, void *data)
+{
+    return count;
+}
+
+static int gpio_sh_switch_led_write (struct file *file, const char *buf,
+                                        unsigned long count, void *data)
+{
+	 u_int32_t val;
+
+    if (sscanf(buf, "%d", &val) != 1)
+        return -EINVAL;
+
+	if (val == 0)
+		ar7240_gpio_out_val (CONFIG_SH_SWITCH_LED_GPIO, !CONFIG_SH_SWITCH_LED_ON);
+	else
+		ar7240_gpio_out_val (CONFIG_SH_SWITCH_LED_GPIO, CONFIG_SH_SWITCH_LED_ON);
+
+	return count;
+}
+#endif
+
+static atomic_t co_state = ATOMIC_INIT(0);
+
+#ifdef CONFIG_SH_SWITCH_CTRL_IN_GPIO
+static struct proc_dir_entry *sh_switch_ctrl_in_entry = NULL;
+static int ci_presss_cnt = 0;
+static int sw_btn_last = -1;
+static int sw_btn_pressed = -1;
+static void ctrlin_times_out(unsigned long dummy);
+static DEFINE_TIMER(ctrlin_timer, ctrlin_times_out, 0, 0);
+
+#define TIMER_CYC_10MS ((HZ/100) == 0 ? 1 : HZ/100)
+#define BTN_LOW_TO_HIGH 1
+#define BTN_HIGH_TO_LOW	0
+
+static void ctrlin_times_out(unsigned long dummy)
+{
+	if (sw_btn_last == 1 && !ar7240_gpio_in_val(CONFIG_SH_SWITCH_CTRL_IN_GPIO)){
+		/* high to low  */
+		mdelay(2);
+		/* make sure is a valid press */
+		if (!ar7240_gpio_in_val(CONFIG_SH_SWITCH_CTRL_IN_GPIO))
+			sw_btn_pressed = BTN_HIGH_TO_LOW;
+	}
+	else if (sw_btn_last == 0 && ar7240_gpio_in_val(CONFIG_SH_SWITCH_CTRL_IN_GPIO)){
+		/* high to low  */
+		mdelay(2);
+		/* make sure is a valid press */
+		if (ar7240_gpio_in_val(CONFIG_SH_SWITCH_CTRL_IN_GPIO))
+			sw_btn_pressed = BTN_LOW_TO_HIGH;
+	}
+	if ((CONFIG_SH_SWITCH_CTRL_IN_ON && sw_btn_pressed == BTN_HIGH_TO_LOW) ||
+		(!CONFIG_SH_SWITCH_CTRL_IN_ON && sw_btn_pressed == BTN_LOW_TO_HIGH)){
+#ifdef CONFIG_SH_SWITCH_CTRL_OUT_GPIO
+		if (atomic_read(&co_state)){
+			atomic_set(&co_state, 0);
+			ar7240_gpio_out_val (CONFIG_SH_SWITCH_CTRL_OUT_GPIO, !CONFIG_SH_SWITCH_CTRL_OUT_ON);
+#ifdef CONFIG_SH_SWITCH_LED_GPIO
+			if (!atomic_read(&led_off))
+				ar7240_gpio_out_val (CONFIG_SH_SWITCH_LED_GPIO, !CONFIG_SH_SWITCH_LED_ON);
+#endif
+		}
+		else{
+			atomic_set(&co_state, 1);
+			ar7240_gpio_out_val (CONFIG_SH_SWITCH_CTRL_OUT_GPIO, CONFIG_SH_SWITCH_CTRL_OUT_ON);
+#ifdef CONFIG_SH_SWITCH_LED_GPIO
+			if (!atomic_read(&led_off))
+				ar7240_gpio_out_val (CONFIG_SH_SWITCH_LED_GPIO, CONFIG_SH_SWITCH_LED_ON);
+#endif
+		}
+#endif
+		ci_presss_cnt++;
+	}
+	sw_btn_pressed = -1;
+
+	sw_btn_last = (ar7240_gpio_in_val(CONFIG_SH_SWITCH_CTRL_IN_GPIO) >> CONFIG_SH_SWITCH_CTRL_IN_GPIO);
+	mod_timer(&ctrlin_timer, jiffies + TIMER_CYC_10MS);
+}
+
+
+static int gpio_sh_switch_ctrl_in_read (char *page, char **start, off_t off,
+               int count, int *eof, void *data)
+{
+	int tmp = ci_presss_cnt;
+	ci_presss_cnt = 0;
+	return sprintf (page, "%d\n", tmp);
+}
+
+static int gpio_sh_switch_ctrl_in_write (struct file *file, const char *buf,
+                                        unsigned long count, void *data)
+{
+	return count;
+}
+
+#endif
+
+#ifdef CONFIG_SH_SWITCH_CTRL_OUT_GPIO
+static struct proc_dir_entry *sh_switch_ctrl_out_entry = NULL;
+static int gpio_sh_switch_ctrl_out_read (char *page, char **start, off_t off,
+               int count, int *eof, void *data)
+{
+	return sprintf (page, "%d\n", atomic_read(&co_state));
+}
+
+static int gpio_sh_switch_ctrl_out_write (struct file *file, const char *buf,
+                                        unsigned long count, void *data)
+{
+	 u_int32_t val;
+
+    if (sscanf(buf, "%d", &val) != 1)
+        return -EINVAL;
+
+	if (val == 0){
+		atomic_set(&co_state, 0);
+		ar7240_gpio_out_val (CONFIG_SH_SWITCH_CTRL_OUT_GPIO, !CONFIG_SH_SWITCH_CTRL_OUT_ON);
+	}
+	else{
+		atomic_set(&co_state, 1);
+		ar7240_gpio_out_val (CONFIG_SH_SWITCH_CTRL_OUT_GPIO, CONFIG_SH_SWITCH_CTRL_OUT_ON);
+	}
+
+	return count;
+}
+#endif
+
+static struct proc_dir_entry *sh_reboot_entry = NULL;
+
+static int gpio_sh_reboot_read (char *page, char **start, off_t off,
+               int count, int *eof, void *data)
+{
+	return sprintf (page, "0\n");
+}
+
+static int gpio_sh_reboot_write (struct file *file, const char *buf,
+                                        unsigned long count, void *data)
+{
+	ar7240_reg_wr(AR7240_WATCHDOG_TMR, 0x80000000);
+	ar7240_reg_wr(AR7240_WATCHDOG_TMR_CONTROL, 0x3);
+	ar7240_reg_wr(AR7240_WATCHDOG_TMR, 0x2);
+
+	return 0;
+}
+
+static int create_smart_home_proc_entry (void)
+{
+	int req;
+
+    if (smart_home_entry != NULL) {
+        printk ("Already have a proc entry for /proc/smart_home\n");
+        return -ENOENT;
+    }
+
+    smart_home_entry = proc_mkdir("smart_home", NULL) ;
+    if (!smart_home_entry)
+        return -ENOENT;
+
+	sh_led_off_entry = create_proc_entry ("led_off", 0644,
+                                                      smart_home_entry);
+	if (!sh_led_off_entry)
+    	return -ENOENT;
+    sh_led_off_entry->write_proc = gpio_sh_led_off_write;
+    sh_led_off_entry->read_proc = gpio_sh_led_off_read;
+#ifdef CONFIG_RESET_GPIO
+	sh_reset_entry = create_proc_entry ("reset", 0644,
+                                                      smart_home_entry);
+    if (!sh_reset_entry)
+        return -ENOENT;
+    sh_reset_entry->write_proc = gpio_sh_reset_write;
+    sh_reset_entry->read_proc = gpio_sh_reset_read;
+	/*config as input */
+	ar7240_gpio_config_input(CONFIG_RESET_GPIO);
+    ar7240_gpio_config_int(CONFIG_RESET_GPIO, INT_TYPE_LEVEL, CONFIG_RESET_GPIO_EFFECT ? INT_POL_ACTIVE_HIGH : INT_POL_ACTIVE_LOW);
+	req = request_irq (AR7240_GPIO_IRQn(CONFIG_RESET_GPIO), reset_irq, 0,
+						  "switch_ctrl_in", NULL);
+	if (req != 0) {
+	   printk (KERN_ERR "unable to request IRQ for switch_ctrl_in GPIO (error %d)\n", req);
+	   ar7240_gpio_intr_shutdown(AR7240_GPIO_IRQn(CONFIG_RESET_GPIO));
+	   return -1;
+	}
+#endif
+
+#ifdef CONFIG_SH_TRICOLOR_LED
+	sh_tricolor_red_led_entry = create_proc_entry ("tricolor_red", 0644,
+                                                      smart_home_entry);
+    if (!sh_tricolor_red_led_entry)
+        return -ENOENT;
+    sh_tricolor_red_led_entry->write_proc = gpio_sh_tricolor_red_led_write;
+    sh_tricolor_red_led_entry->read_proc = gpio_sh_tricolor_red_led_read;
+
+	sh_tricolor_green_led_entry = create_proc_entry ("tricolor_green", 0644,
+                                                      smart_home_entry);
+    if (!sh_tricolor_green_led_entry)
+        return -ENOENT;
+    sh_tricolor_green_led_entry->write_proc = gpio_sh_tricolor_green_led_write;
+    sh_tricolor_green_led_entry->read_proc = gpio_sh_tricolor_green_led_read;
+
+	/* configure gpio as outputs */
+    ar7240_gpio_config_output (CONFIG_SH_TRICOLOR_RED_LED_GPIO);
+	ar7240_gpio_config_output (CONFIG_SH_TRICOLOR_GREEN_LED_GPIO);
+    /* green and led on make orange */
+	if (CONFIG_SH_TRICOLOR_REAL_ORANGE == 1)
+	{
+		ar7240_gpio_out_val(CONFIG_SH_TRICOLOR_RED_LED_GPIO, CONFIG_SH_TRICOLOR_LED_ON);
+		ar7240_gpio_out_val(CONFIG_SH_TRICOLOR_GREEN_LED_GPIO, !CONFIG_SH_TRICOLOR_LED_ON);
+	}
+	else
+	{
+		ar7240_gpio_out_val(CONFIG_SH_TRICOLOR_RED_LED_GPIO, CONFIG_SH_TRICOLOR_LED_ON);
+		ar7240_gpio_out_val(CONFIG_SH_TRICOLOR_GREEN_LED_GPIO, CONFIG_SH_TRICOLOR_LED_ON);
+	}
+
+#endif
+
+#ifdef CONFIG_SH_SWITCH_LED_GPIO
+    sh_switch_led_entry = create_proc_entry ("switch_led", 0644,
+                                                      smart_home_entry);
+    if (!sh_switch_led_entry)
+        return -ENOENT;
+
+    sh_switch_led_entry->write_proc = gpio_sh_switch_led_write;
+    sh_switch_led_entry->read_proc = gpio_sh_switch_led_read;
+	 /* configure gpio as outputs */
+    ar7240_gpio_config_output (CONFIG_SH_SWITCH_LED_GPIO);
+    /* switch led off */
+    ar7240_gpio_out_val(CONFIG_SH_SWITCH_LED_GPIO, !CONFIG_SH_SWITCH_LED_ON);
+#endif
+
+#ifdef CONFIG_SH_SWITCH_CTRL_IN_GPIO
+	sh_switch_ctrl_in_entry = create_proc_entry ("switch_ctrl_in", 0644,
+                                                      smart_home_entry);
+    if (!sh_switch_ctrl_in_entry)
+        return -ENOENT;
+    sh_switch_ctrl_in_entry->write_proc = gpio_sh_switch_ctrl_in_write;
+    sh_switch_ctrl_in_entry->read_proc = gpio_sh_switch_ctrl_in_read;
+	/* AR7240_GPIO_IRQ_COUNT is only 16, no interrupt available, so poll it by timer */
+	/* disable eth switch led */
+	ar7240_reg_rmw_clear(AR7240_GPIO_FUNCTIONS, 0xF8);
+	ar7240_gpio_config_input(CONFIG_SH_SWITCH_CTRL_IN_GPIO);
+	/* every 62ms */
+	mod_timer(&ctrlin_timer, jiffies + TIMER_CYC_10MS);
+#endif
+
+#ifdef CONFIG_SH_SWITCH_CTRL_OUT_GPIO
+    sh_switch_ctrl_out_entry = create_proc_entry ("switch_ctrl_out", 0644,
+                                                      smart_home_entry);
+    if (!sh_switch_ctrl_out_entry)
+        return -ENOENT;
+    sh_switch_ctrl_out_entry->write_proc = gpio_sh_switch_ctrl_out_write;
+    sh_switch_ctrl_out_entry->read_proc = gpio_sh_switch_ctrl_out_read;
+
+	 /* configure gpio as outputs */
+    ar7240_gpio_config_output (CONFIG_SH_SWITCH_CTRL_OUT_GPIO);
+    /* switch off */
+    ar7240_gpio_out_val(CONFIG_SH_SWITCH_CTRL_OUT_GPIO, 0);
+#endif
+
+	sh_reboot_entry = create_proc_entry ("reboot", 0644,
+                                                      smart_home_entry);
+    if (!sh_reboot_entry)
+        return -ENOENT;
+    sh_reboot_entry->write_proc = gpio_sh_reboot_write;
+    sh_reboot_entry->read_proc = gpio_sh_reboot_read;
+
+	return 0;
+}
+
 static void __init hornet_ub_setup(void)
 {
 	u8 *art = (u8 *) KSEG1ADDR(0x1fff0000);
@@ -168,6 +561,8 @@ static void __init hornet_ub_setup(void)
 
 	ath79_register_wmac(art, NULL);
 	ath79_register_usb();
+
+	create_smart_home_proc_entry();
 }
 
 MIPS_MACHINE(ATH79_MACH_TL_HS110, "TL-HS110", "TP-LINK HS110",
