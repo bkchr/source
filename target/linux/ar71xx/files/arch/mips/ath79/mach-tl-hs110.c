@@ -42,7 +42,7 @@
 #define HORNET_UB_MAC0_OFFSET		0x0000
 #define HORNET_UB_MAC1_OFFSET		0x0006
 #define HORNET_UB_CALDATA_OFFSET	0x1000
-
+/*
 static struct gpio_led hornet_ub_leds_gpio[] __initdata = {
 	{
 		.name		= "alfa:blue:lan",
@@ -277,16 +277,12 @@ static DEFINE_TIMER(ctrlin_timer, ctrlin_times_out, 0, 0);
 static void ctrlin_times_out(unsigned long dummy)
 {
 	if (sw_btn_last == 1 && !ar7240_gpio_in_val(CONFIG_SH_SWITCH_CTRL_IN_GPIO)){
-		/* high to low  */
 		mdelay(2);
-		/* make sure is a valid press */
 		if (!ar7240_gpio_in_val(CONFIG_SH_SWITCH_CTRL_IN_GPIO))
 			sw_btn_pressed = BTN_HIGH_TO_LOW;
 	}
 	else if (sw_btn_last == 0 && ar7240_gpio_in_val(CONFIG_SH_SWITCH_CTRL_IN_GPIO)){
-		/* high to low  */
 		mdelay(2);
-		/* make sure is a valid press */
 		if (ar7240_gpio_in_val(CONFIG_SH_SWITCH_CTRL_IN_GPIO))
 			sw_btn_pressed = BTN_LOW_TO_HIGH;
 	}
@@ -408,7 +404,6 @@ static int create_smart_home_proc_entry (void)
         return -ENOENT;
     sh_reset_entry->write_proc = gpio_sh_reset_write;
     sh_reset_entry->read_proc = gpio_sh_reset_read;
-	/*config as input */
 	ar7240_gpio_config_input(CONFIG_RESET_GPIO);
     ar7240_gpio_config_int(CONFIG_RESET_GPIO, INT_TYPE_LEVEL, CONFIG_RESET_GPIO_EFFECT ? INT_POL_ACTIVE_HIGH : INT_POL_ACTIVE_LOW);
 	req = request_irq (AR7240_GPIO_IRQn(CONFIG_RESET_GPIO), reset_irq, 0,
@@ -435,10 +430,8 @@ static int create_smart_home_proc_entry (void)
     sh_tricolor_green_led_entry->write_proc = gpio_sh_tricolor_green_led_write;
     sh_tricolor_green_led_entry->read_proc = gpio_sh_tricolor_green_led_read;
 
-	/* configure gpio as outputs */
     ar7240_gpio_config_output (CONFIG_SH_TRICOLOR_RED_LED_GPIO);
 	ar7240_gpio_config_output (CONFIG_SH_TRICOLOR_GREEN_LED_GPIO);
-    /* green and led on make orange */
 	if (CONFIG_SH_TRICOLOR_REAL_ORANGE == 1)
 	{
 		ar7240_gpio_out_val(CONFIG_SH_TRICOLOR_RED_LED_GPIO, CONFIG_SH_TRICOLOR_LED_ON);
@@ -460,9 +453,7 @@ static int create_smart_home_proc_entry (void)
 
     sh_switch_led_entry->write_proc = gpio_sh_switch_led_write;
     sh_switch_led_entry->read_proc = gpio_sh_switch_led_read;
-	 /* configure gpio as outputs */
     ar7240_gpio_config_output (CONFIG_SH_SWITCH_LED_GPIO);
-    /* switch led off */
     ar7240_gpio_out_val(CONFIG_SH_SWITCH_LED_GPIO, !CONFIG_SH_SWITCH_LED_ON);
 #endif
 
@@ -473,11 +464,8 @@ static int create_smart_home_proc_entry (void)
         return -ENOENT;
     sh_switch_ctrl_in_entry->write_proc = gpio_sh_switch_ctrl_in_write;
     sh_switch_ctrl_in_entry->read_proc = gpio_sh_switch_ctrl_in_read;
-	/* AR7240_GPIO_IRQ_COUNT is only 16, no interrupt available, so poll it by timer */
-	/* disable eth switch led */
 	ar7240_reg_rmw_clear(AR7240_GPIO_FUNCTIONS, 0xF8);
 	ar7240_gpio_config_input(CONFIG_SH_SWITCH_CTRL_IN_GPIO);
-	/* every 62ms */
 	mod_timer(&ctrlin_timer, jiffies + TIMER_CYC_10MS);
 #endif
 
@@ -489,9 +477,7 @@ static int create_smart_home_proc_entry (void)
     sh_switch_ctrl_out_entry->write_proc = gpio_sh_switch_ctrl_out_write;
     sh_switch_ctrl_out_entry->read_proc = gpio_sh_switch_ctrl_out_read;
 
-	 /* configure gpio as outputs */
     ar7240_gpio_config_output (CONFIG_SH_SWITCH_CTRL_OUT_GPIO);
-    /* switch off */
     ar7240_gpio_out_val(CONFIG_SH_SWITCH_CTRL_OUT_GPIO, 0);
 #endif
 
@@ -504,20 +490,20 @@ static int create_smart_home_proc_entry (void)
 
 	return 0;
 }
-
+*/
 static void __init hornet_ub_setup(void)
 {
 	u8 *art = (u8 *) KSEG1ADDR(0x1fff0000);
-
-	hornet_ub_gpio_setup();
+	
+	//hornet_ub_gpio_setup();
 
 	ath79_register_m25p80(NULL);
-	ath79_register_leds_gpio(-1, ARRAY_SIZE(hornet_ub_leds_gpio),
+	/*ath79_register_leds_gpio(-1, ARRAY_SIZE(hornet_ub_leds_gpio),
 					hornet_ub_leds_gpio);
 	ath79_register_gpio_keys_polled(-1, HORNET_UB_KEYS_POLL_INTERVAL,
 					 ARRAY_SIZE(hornet_ub_gpio_keys),
 					 hornet_ub_gpio_keys);
-
+*/
 	ath79_init_mac(ath79_eth1_data.mac_addr,
 			art + HORNET_UB_MAC0_OFFSET, 0);
 	ath79_init_mac(ath79_eth0_data.mac_addr,
@@ -562,7 +548,7 @@ static void __init hornet_ub_setup(void)
 	ath79_register_wmac(art, NULL);
 	ath79_register_usb();
 
-	create_smart_home_proc_entry();
+//	create_smart_home_proc_entry();
 }
 
 MIPS_MACHINE(ATH79_MACH_TL_HS110, "TL-HS110", "TP-LINK HS110",

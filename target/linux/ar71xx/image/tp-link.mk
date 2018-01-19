@@ -1011,5 +1011,6 @@ define Device/tl-hs110
     IMAGE_SIZE := 3776k
     MTDPARTS := spi0.0:64k(u-boot),3776k(firmware),64k(ART)
     CONSOLE := ttyATH0,115200
+    IMAGES := kernel.bin rootfs.bin sysupgrade.bin
 endef
 TARGET_DEVICES += tl-hs110
